@@ -57,6 +57,7 @@
 
 #define NO_POCKET_GO             1
 #define MIYOO3                1
+#define NO_M3             1  // use m3 keyboard in daemon
 
 #define LRAM_NUM              1
 #define PALETTE_SIZE          256
@@ -75,8 +76,9 @@ module_param(flip,bool,0660);
 // 4 = ?
 // Will be automatically detected if left unset (which usually works)
 static uint32_t version=0;
+static bool invert=false;
 module_param(version,uint,0660);
-
+module_param(invert,bool,0660);
 struct myfb_par {
   struct device *dev;
   struct platform_device *pdev;
@@ -116,6 +118,7 @@ static int major = -1;
 static struct cdev mycdev;
 static struct class *myclass = NULL;
 static uint32_t miyoo_ver=0;
+static uint32_t m3_ver=3;
 static int flip_mode=0;
 static int new_bp=8;
 static int new_fp=8;
@@ -147,7 +150,7 @@ static void suniv_gpio_init(void)
   writel(0x00222222, iomm.gpio + PD_CFG2);
   writel(0x00040001, iomm.gpio + PD_PUL0);
   writel(0x00000000, iomm.gpio + PD_PUL1);
-  writel(0xffffffff, iomm.gpio + PD_DRV0);
+  //writel(0xffffffff, iomm.gpio + PD_DRV0);
   writel(0xffffffff, iomm.gpio + PD_DRV1);
 
   ret = readl(iomm.gpio + PE_PUL0);
@@ -583,7 +586,9 @@ static int panel_init(void)
 
     gpio_wr_cmd(0x13);
 
-    gpio_wr_cmd(0x20);
+    if (invert) {
+        gpio_wr_cmd(0x21); // invert colors
+    }
 
     gpio_wr_cmd(0x35);
     gpio_wr_dat(0x00); // te mode
@@ -593,7 +598,11 @@ static int panel_init(void)
     gpio_wr_dat(0x30);
 
     gpio_wr_cmd(0x36);
-    gpio_wr_dat(0xe0); // display mode
+    if(flip){
+        gpio_wr_dat(0x38);
+    } else {
+        gpio_wr_dat(0xe0);
+    }
 
     gpio_wr_cmd(0x3a);
     gpio_wr_dat(0x55);
@@ -1572,7 +1581,10 @@ static long myioctl(struct file *filp, unsigned int cmd, unsigned long arg)
     }
     break;
   case MIYOO_FB0_GET_VER:
-#if defined(MIYOO3)
+#if defined(M3)
+    w = copy_to_user((void*)arg, &m3_ver, sizeof(uint32_t)); // set keyboard version 3 in daemon
+    break;
+#elif defined(MIYOO3)
     w = copy_to_user((void*)arg, &miyoo_ver, sizeof(uint32_t));
     break;
 #elif defined(POCKETGO)
@@ -1662,4 +1674,3 @@ module_exit(fb_cleanup);
 MODULE_DESCRIPTION("Allwinner suniv framebuffer driver for Miyoo handheld");
 MODULE_AUTHOR("Steward Fu <steward.fu@gmail.com>");
 MODULE_LICENSE("GPL");
-

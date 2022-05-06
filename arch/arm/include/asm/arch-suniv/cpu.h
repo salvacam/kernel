@@ -26,6 +26,5 @@
 #define SUNIV_DA_BASE       0x01C22000
 #define SUNIV_CODEC_BASE    0x01C23C00
 #define SUNIV_LRADC_BASE    0x01C23400
-
 #endif
 

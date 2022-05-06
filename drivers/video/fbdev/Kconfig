@@ -2505,4 +2505,3 @@ config FB_R61520
 	select FB_SYS_IMAGEBLIT
 	help
 	  Framebuffer driver for Renesas R61520 SLCD panel.
-

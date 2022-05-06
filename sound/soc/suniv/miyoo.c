@@ -55,6 +55,10 @@
 #define MIYOO_FB0_PUT_OSD     _IOWR(0x100, 0, unsigned long)
 #define MIYOO_SND_SET_VOLUME  _IOWR(0x100, 0, unsigned long)
 #define MIYOO_SND_GET_VOLUME  _IOWR(0x101, 0, unsigned long)
+// 0 - miyoo
+// 1 - m3
+static uint32_t version=0;
+module_param(version,uint,0660);
 
 struct mypcm {
   uint32_t dma_period;
@@ -110,16 +114,23 @@ static void suniv_codec_init(void)
 static void suniv_gpio_init(void)
 {
   uint32_t ret;
-
-  ret = readl(iomm.gpio + PA_CFG0);
+if ((version=0)) {
+    ret = readl(iomm.gpio + PA_CFG0);
 #if defined(USE_EARPHONE)
-  ret&= 0xfffff0f0;
+    ret&= 0xfffff0f0;
 #else
-  ret&= 0xfffffff0;
+    ret &= 0xfffffff0;
 #endif
-  ret|= 0x00000001;
-  writel(ret, iomm.gpio + PA_CFG0);
-  suniv_setbits(iomm.gpio + PA_DATA, (1 << 0));
+    ret |= 0x00000001;
+    writel(ret, iomm.gpio + PA_CFG0);
+    suniv_setbits(iomm.gpio + PA_DATA, (1 << 0));
+    } else {
+    ret = readl(iomm.gpio + PD_CFG0);
+    ret &= 0xfffffff0;
+    ret |= 0x00000001;
+    writel(ret, iomm.gpio + PD_CFG0);
+    suniv_setbits(iomm.gpio + PD_DATA, (1 << 0));
+}
 }
 
 static irqreturn_t dma_irq_handler(int irq, void *arg)

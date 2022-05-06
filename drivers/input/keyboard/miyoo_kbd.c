@@ -65,7 +65,7 @@
  * | PE7 | OUT_1   | matx       | A      | Y            |             |
  * | PE8 | OUT_2   | matx       | B      | Y            |             |
  * | PE9 | OUT_3   | matx       | X      | Y            |             |
- * 
+ *
  * Notes:
  *  - init_pullup? shows if an internal pull-up resistor has been
  *    enabled in kbd_init
@@ -99,6 +99,7 @@
 #define IN_R1   ((32 * 2) + 2)
 #define IN_L2   ((32 * 4) + 0)
 #define IN_R2   ((32 * 2) + 3)
+#define IN_R2_M3 ((32 * 0) + 2)
 #define OUT_1   ((32 * 4) + 7)
 #define OUT_2   ((32 * 4) + 8)
 #define OUT_3   ((32 * 4) + 9)
@@ -107,6 +108,7 @@
 #define IN_3    ((32 * 4) + 4)
 #define IN_4    ((32 * 4) + 5)
 #define IN_A    ((32 * 3) + 0)
+#define IN_A_M3 ((32 * 0) + 0)
 #define IN_TA   ((32 * 3) + 9)
 #define IN_B    ((32 * 0) + 3)
 #define IN_TB   ((32 * 2) + 0)
@@ -136,6 +138,7 @@ bool hotkey_actioned=false;
 bool hotkey_down=false;
 bool non_hotkey_first=false;
 bool non_hotkey_menu=false;
+module_param(miyoo_ver,ulong,0660);
 
 static int do_input_request(uint32_t pin, const char*name)
 {
@@ -168,7 +171,7 @@ static void print_key(uint32_t val, uint8_t is_pressed)
     if(map_val[i] == val){
       if(is_pressed){
         printk("%s\n", map_key[i]);
-      } 
+      }
       break;
     }
   }
@@ -179,7 +182,7 @@ static void report_key(uint32_t btn, uint32_t mask, uint8_t key)
 {
   static uint32_t btn_pressed=0;
   static uint32_t btn_released=0xffff;
- 
+
   if(btn & mask){
     btn_released&= ~mask;
     if((btn_pressed & mask) == 0){
@@ -285,7 +288,7 @@ static void scan_handler(unsigned long unused)
 #endif
 
   }
-  else{
+  else if(miyoo_ver == 4){
     gpio_direction_input(IN_1);
     gpio_direction_input(IN_2);
     gpio_direction_input(IN_3);
@@ -341,12 +344,69 @@ static void scan_handler(unsigned long unused)
       val|= MY_L2;
     }
     if(gpio_get_value(IN_PA1) == 0){
-      val|= MY_R2;    
+      val|= MY_R2;
     }
     if(gpio_get_value(IN_MENU) == 0){
       val|= MY_R;
     }
-  }
+  } else if(miyoo_ver == 3) {
+    gpio_direction_input(IN_4);
+    gpio_direction_input(IN_A_M3);
+    gpio_direction_input(IN_PA1);
+    gpio_direction_output(IN_3,1);
+    if(gpio_get_value(IN_1) == 1){
+        val|= MY_UP;
+    }
+    if(gpio_get_value(IN_2) == 1){
+        val|= MY_LEFT;
+    }
+    if(gpio_get_value(IN_A_M3) == 1){
+        val|= MY_TA;
+    }
+    if(gpio_get_value(IN_PA1) == 1){
+        val|= MY_TB;
+    }
+
+    gpio_direction_input(IN_3);
+    gpio_direction_output(IN_4,1);
+    if(gpio_get_value(IN_1) == 1){
+        val|= MY_DOWN;
+    }
+    if(gpio_get_value(IN_2) == 1){
+        val|= MY_RIGHT;
+    }
+    if(gpio_get_value(IN_A_M3) == 1){
+        val|= MY_A;
+    }
+    if(gpio_get_value(IN_PA1) == 1){
+        val|= MY_B;
+    }
+
+    gpio_direction_input(IN_4);
+    gpio_direction_output(OUT_2,1);
+    gpio_direction_output(OUT_3,1);
+    if(gpio_get_value(IN_PA1) == 1){
+        val|= MY_R;
+    }
+    if(gpio_get_value(IN_A_M3) == 1){
+        val|= MY_SELECT;
+    }
+    if(gpio_get_value(IN_1) == 1){
+        val|= MY_START;
+    }
+    if(gpio_get_value(IN_2) == 1){
+        val|= MY_L1;
+    }
+
+    gpio_direction_input(OUT_2);
+    gpio_direction_input(OUT_3);
+    gpio_direction_output(IN_4,1);
+    gpio_direction_output(IN_A_M3,1);
+    gpio_direction_input(IN_R2_M3);
+    if(gpio_get_value(IN_R2_M3) == 1){
+        val|= MY_R1;
+    }
+}
 
   if(lockkey){
     val = val & MY_R ? MY_R : 0;
@@ -544,7 +604,7 @@ static void scan_handler(unsigned long unused)
     report_key(pre, MY_R1, KEY_BACKSPACE);
     report_key(pre, MY_L2, KEY_PAGEUP);
     report_key(pre, MY_R2, KEY_PAGEDOWN);
-	
+
     input_sync(mydev);
     hotkey_mod_last = false;
   }
@@ -588,7 +648,7 @@ static long myioctl(struct file *filp, unsigned int cmd, unsigned long arg)
     break;
   case MIYOO_KBD_SET_VER:
     miyoo_ver = arg;
-    
+
 printk("miyoo keypad config as v%d\n", (int)miyoo_ver);
     break;
   case MIYOO_KBD_LOCK_KEY:
@@ -624,7 +684,11 @@ static int __init kbd_init(void)
   writel(ret, gpio + (2 * 0x24 + 0x1c)); // (dirty again)
 
   ret = readl(gpio + (4 * 0x24 + 0x00)); // PE_CFG0
-  ret&= 0xfffffff0;                      // set PE0 as input
+  if (miyoo_ver != 3) {
+      ret&= 0xfffffff0;                      // set PE0 as input
+  } else {
+      ret&= 0x0f00000f;
+  }
   writel(ret, gpio + (4 * 0x24 + 0x00));
 
   ret = readl(gpio + (4 * 0x24 + 0x1c)); // PE_PULL0
@@ -642,21 +706,28 @@ static int __init kbd_init(void)
   do_input_request(IN_L1, 	"gpio_l1");
   do_input_request(IN_R1, 	"gpio_r1");
   do_input_request(IN_L2, 	"gpio_l2");
-  do_input_request(IN_R2, 	"gpio_r2");
   do_input_request(IN_1, 		"gpio_pe2");
   do_input_request(IN_2, 		"gpio_pe3");
   do_input_request(IN_3, 		"gpio_pe4");
   do_input_request(IN_4, 		"gpio_pe5");
-  do_input_request(IN_A, 		"gpio_a");
+    if(miyoo_ver != 3) {
+        do_input_request(IN_A, "gpio_a");
+        do_input_request(IN_R2, "gpio_r2");
+    } else {
+      do_input_request(IN_A_M3, 		"gpio_a");
+      do_input_request(IN_R2_M3, 	"gpio_r2");
+  }
+
   do_input_request(IN_TA, 	"gpio_ta");
 #if !defined(USE_UART)
   do_input_request(IN_B, 		"gpio_b");
   do_input_request(IN_TB, 	"gpio_tb");
 #endif
-  do_output_request(OUT_1, 	"gpio_pe7");
-  do_output_request(OUT_2, 	"gpio_pe8");
-  do_output_request(OUT_3, 	"gpio_pe9");
-  
+  if(miyoo_ver != 3) {
+      do_output_request(OUT_1, "gpio_pe7");
+  }
+  do_output_request(OUT_2, "gpio_pe8");
+  do_output_request(OUT_3, "gpio_pe9");
   mydev = input_allocate_device();
   set_bit(EV_KEY,mydev-> evbit);
   set_bit(KEY_UP, mydev->keybit);
@@ -673,24 +744,24 @@ static int __init kbd_init(void)
   set_bit(KEY_BACKSPACE, mydev->keybit);
   set_bit(KEY_RIGHTCTRL, mydev->keybit);
   set_bit(KEY_RIGHTALT, mydev->keybit);
-  set_bit(KEY_RIGHTSHIFT, mydev->keybit);  
+  set_bit(KEY_RIGHTSHIFT, mydev->keybit);
   set_bit(KEY_PAGEUP, mydev->keybit);
   set_bit(KEY_PAGEDOWN, mydev->keybit);
   mydev->name = "miyoo_keypad";
   mydev->id.bustype = BUS_HOST;
   ret = input_register_device(mydev);
- 
+
   alloc_chrdev_region(&major, 0, 1, "miyoo_kbd");
   myclass = class_create(THIS_MODULE, "miyoo_kbd");
   device_create(myclass, NULL, major, NULL, "miyoo_kbd");
   cdev_init(&mycdev, &myfops);
   cdev_add(&mycdev, major, 1);
-  
+
 	setup_timer(&mytimer, scan_handler, 0);
   mod_timer(&mytimer, jiffies + msecs_to_jiffies(myperiod));
   return 0;
 }
-  
+
 static void __exit kbd_exit(void)
 {
   input_unregister_device(mydev);
@@ -702,7 +773,7 @@ static void __exit kbd_exit(void)
   unregister_chrdev_region(major, 1);
   iounmap(gpio);
 }
-  
+
 module_init(kbd_init);
 module_exit(kbd_exit);
 
