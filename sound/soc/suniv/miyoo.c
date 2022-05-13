@@ -126,10 +126,10 @@ if ((version=0)) {
     suniv_setbits(iomm.gpio + PA_DATA, (1 << 0));
     } else {
     ret = readl(iomm.gpio + PD_CFG0);
-    ret &= 0xfffffff0;
-    ret |= 0x00000001;
-    writel(ret, iomm.gpio + PD_CFG0);
-    suniv_setbits(iomm.gpio + PD_DATA, (1 << 0));
+//    ret &= 0xfffffff0;
+//    ret |= 0x00000001;
+//    writel(ret, iomm.gpio + PD_CFG0);
+//    suniv_setbits(iomm.gpio + PD_DATA, (1 << 0));
 }
 }
 

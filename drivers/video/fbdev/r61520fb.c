@@ -57,7 +57,7 @@
 
 #define NO_POCKET_GO             1
 #define MIYOO3                1
-#define NO_M3             1  // use m3 keyboard in daemon
+#define M3             1  // use m3 keyboard in daemon
 
 #define LRAM_NUM              1
 #define PALETTE_SIZE          256
