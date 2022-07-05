@@ -52,6 +52,11 @@
 
 #define PALETTE_SIZE 256
 #define DRIVER_NAME  "q8-fb"
+DECLARE_WAIT_QUEUE_HEAD(wait_vsync_queue);
+struct myfb_app{
+    uint32_t yoffset;
+    uint32_t vsync_count;
+};
 
 struct myfb_par {
     struct device *dev;
@@ -60,13 +65,15 @@ struct myfb_par {
     resource_size_t p_palette_base;
     unsigned short *v_palette_base;
 
-    int yoffset;
     void *vram_virt;
     uint32_t vram_size;
     dma_addr_t vram_phys;
+    struct myfb_app *app_virt;
 
     int bpp;
     int lcdc_irq;
+    int gpio_irq;
+    int lcdc_ready;
     u32 pseudo_palette[16];
     struct fb_videomode mode;
 };
@@ -87,6 +94,8 @@ struct timer_list mytimer;
 static struct suniv_iomm iomm={0};
 static struct myfb_par *mypar=NULL;
 static struct fb_var_screeninfo myfb_var={0};
+uint16_t x, gscan[8]={0};
+
 
 static struct fb_fix_screeninfo myfb_fix = {
         .id = DRIVER_NAME,
@@ -98,6 +107,13 @@ static struct fb_fix_screeninfo myfb_fix = {
         .ywrapstep = 0,
         .accel = FB_ACCEL_NONE
 };
+
+static int wait_for_vsync(struct myfb_par *par)
+{
+    uint32_t count = par->app_virt->vsync_count;
+    long t = wait_event_interruptible_timeout(wait_vsync_queue, count != par->app_virt->vsync_count, HZ / 10);
+    return t > 0 ? 0 : (t < 0 ? (int)t : -ETIMEDOUT);
+}
 
 static void suniv_gpio_init(void)
 {
@@ -173,18 +189,52 @@ static void lcdc_wr_dat(uint32_t cmd)
     lcdc_wr(1, cmd);
 }
 
+static uint32_t extend_24b_to_16b(uint32_t value)
+{
+    return ((value & 0xfc0000) >> 8) | ((value & 0xc000) >> 6) | ((value & 0x1c00) >> 5) | ((value & 0x00f8) >> 3);
+}
+
+static uint32_t lcdc_rd_dat(void)
+{
+    while(lcdc_wait_busy());
+    suniv_setbits(iomm.lcdc + TCON0_CPU_IF_REG, (1 << 25)); // ca=1
+    while(lcdc_wait_busy());
+    return extend_24b_to_16b(readl(iomm.lcdc + TCON0_CPU_RD_REG));
+}
+
 static void refresh_lcd(struct myfb_par *par)
 {
-    if(par->yoffset == 0){
-        suniv_setbits(iomm.debe + DEBE_MODE_CTRL_REG, (1 << 8));
-        suniv_clrbits(iomm.debe + DEBE_MODE_CTRL_REG, (1 << 9));
+    suniv_clrbits(iomm.lcdc + TCON0_CPU_IF_REG, (1 << 28));
+    lcdc_wr_cmd(0x45);
+    for(x=0; x<8; x++){
+        gscan[x] = lcdc_rd_dat();
     }
-    else{
-        suniv_clrbits(iomm.debe + DEBE_MODE_CTRL_REG, (1 << 8));
-        suniv_setbits(iomm.debe + DEBE_MODE_CTRL_REG, (1 << 9));
+
+    suniv_setbits(iomm.lcdc + TCON0_CPU_IF_REG, (1 << 28));
+    if (gscan[2] == 1){
+        if (par->lcdc_ready) {
+            lcdc_wr_cmd(0x2c);
+            if (par->app_virt->yoffset == 0) {
+                suniv_setbits(iomm.debe + DEBE_MODE_CTRL_REG, (1 << 8));
+                suniv_clrbits(iomm.debe + DEBE_MODE_CTRL_REG, (1 << 9));
+
+            } else {
+                suniv_clrbits(iomm.debe + DEBE_MODE_CTRL_REG, (1 << 8));
+                suniv_setbits(iomm.debe + DEBE_MODE_CTRL_REG, (1 << 9));
+            }
+        }
+        suniv_setbits(iomm.debe + DEBE_REGBUFF_CTRL_REG, (1 << 0));
+        suniv_setbits(iomm.lcdc + TCON_CTRL_REG, (1 << 31));
+
+        par->app_virt->vsync_count += 1;
+        wake_up_interruptible_all(&wait_vsync_queue);
     }
-    suniv_setbits(iomm.debe + DEBE_REGBUFF_CTRL_REG, (1 << 0));
-    suniv_setbits(iomm.lcdc + TCON_CTRL_REG, (1 << 31));
+}
+
+static irqreturn_t gpio_irq_handler(int irq, void *arg)
+{
+    refresh_lcd(arg);
+    return IRQ_HANDLED;
 }
 
 static irqreturn_t lcdc_irq_handler(int irq, void *arg)
@@ -325,7 +375,7 @@ static void init_lcd(void)
     lcdc_wr_cmd(0x29);       // Display ON
     lcdc_wr_cmd(0x2c);       // Display ON
 
-    mypar->yoffset = 0;
+    mypar->app_virt->yoffset = 0;
     memset(mypar->vram_virt, 0, 320*240*4);
 }
 
@@ -363,7 +413,7 @@ static void suniv_lcdc_init(struct myfb_par *par)
     writel((uint32_t)(par->vram_phys+ 320*240*2) >> 29, iomm.debe + DEBE_LAY1_FB_HI_ADDR_REG);
 
     writel((1 << 31) | ((ret & 0x1f) << 4) | (1 << 24), iomm.lcdc + TCON0_CTRL_REG);
-    writel((0xf << 28) | (25 << 0), iomm.lcdc + TCON_CLK_CTRL_REG); //6, 15, 25
+    writel((0xf << 28) | (6 << 0), iomm.lcdc + TCON_CLK_CTRL_REG); //6, 15, 25
     writel((4 << 29) | (1 << 26), iomm.lcdc + TCON0_CPU_IF_REG);
     writel((1 << 28), iomm.lcdc + TCON0_IO_CTRL_REG0);
 
@@ -406,6 +456,17 @@ static void suniv_enable_irq(struct myfb_par *par)
             printk("%s, failed to register lcdc interrupt(%d)\n", __func__, par->lcdc_irq);
         }
     }
+
+    par->gpio_irq = gpio_to_irq(((32 * 4) + 10));
+    if(par->gpio_irq < 0){
+        printk("%s, failed to get irq number for gpio irq\n", __func__);
+    }
+    else{
+        ret = request_irq(par->gpio_irq, gpio_irq_handler, IRQF_TRIGGER_RISING, "gpio_irq", par);
+        if(ret){
+            printk("%s, failed to register gpio interrupt(%d)\n", __func__, par->gpio_irq);
+        }
+    }
 }
 
 static void suniv_cpu_init(struct myfb_par *par)
@@ -435,6 +496,7 @@ static void lcd_delay_init(unsigned long param)
 {
     suniv_cpu_init(mypar);
     suniv_lcdc_init(mypar);
+    mypar->lcdc_ready = 1;
     suniv_enable_irq(mypar);
 }
 
@@ -494,7 +556,7 @@ static int myfb_set_par(struct fb_info *info)
     struct myfb_par *par = info->par;
 
     fb_var_to_videomode(&par->mode, &info->var);
-    par->yoffset = info->var.yoffset;
+    par->app_virt->yoffset = info->var.yoffset;
     par->bpp = info->var.bits_per_pixel;
     info->fix.visual = FB_VISUAL_TRUECOLOR;
     info->fix.line_length = (par->mode.xres * par->bpp) / 8;
@@ -505,8 +567,10 @@ static int myfb_set_par(struct fb_info *info)
 
 static int myfb_ioctl(struct fb_info *info, unsigned int cmd, unsigned long arg)
 {
+    struct myfb_par *par = info->par;
     switch(cmd){
         case FBIO_WAITFORVSYNC:
+            wait_for_vsync(par);
             break;
     }
     return 0;
@@ -534,7 +598,7 @@ static int myfb_pan_display(struct fb_var_screeninfo *var, struct fb_info *info)
     if((var->xoffset != info->var.xoffset) || (var->yoffset != info->var.yoffset)){
         info->var.xoffset = var->xoffset;
         info->var.yoffset = var->yoffset;
-        par->yoffset = var->yoffset;
+        par->app_virt->yoffset = var->yoffset;
     }
     return 0;
 }
@@ -582,7 +646,7 @@ static int myfb_probe(struct platform_device *device)
     par->bpp = 16;
     fb_videomode_to_var(&myfb_var, mode);
 
-    par->vram_size = 320 * 240 * 2 * 2;
+    par->vram_size = (320 * 240 * 2 * 4) + 4096;
     par->vram_virt = dma_alloc_coherent(NULL, par->vram_size, (resource_size_t*)&par->vram_phys, GFP_KERNEL | GFP_DMA);
     if(!par->vram_virt){
         return -EINVAL;
@@ -591,6 +655,7 @@ static int myfb_probe(struct platform_device *device)
     myfb_fix.smem_start = par->vram_phys;
     myfb_fix.smem_len = par->vram_size;
     myfb_fix.line_length = 320 * 2;
+    par->app_virt = (struct myfb_app*)((uint8_t*)par->vram_virt + (320 * 240 * 2 * 4));
 
     par->v_palette_base = dma_alloc_coherent(NULL, PALETTE_SIZE, (resource_size_t*)&par->p_palette_base, GFP_KERNEL | GFP_DMA);
     if(!par->v_palette_base){
@@ -620,12 +685,12 @@ static int myfb_probe(struct platform_device *device)
     }
 
     mypar = par;
+    mypar->lcdc_ready = 0;
+    mypar->app_virt->vsync_count = 0;
     for(ret=0; ret<of_clk_get_parent_count(device->dev.of_node); ret++){
         clk_prepare_enable(of_clk_get(device->dev.of_node, ret));
     }
-    fb_prepare_logo(info, 0);
-    fb_show_logo(info, 0);
-
+    init_waitqueue_head(&wait_vsync_queue);
     setup_timer(&mytimer, lcd_delay_init, 0);
     mod_timer(&mytimer, jiffies + HZ);
     return 0;

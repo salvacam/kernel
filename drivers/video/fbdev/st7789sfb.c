@@ -112,6 +112,7 @@ static struct myfb_par *mypar=NULL;
 static struct fb_var_screeninfo myfb_var={0};
 uint16_t x, gscan[8]={0};
 static int count;
+static bool sync = false;
 
 static struct fb_fix_screeninfo myfb_fix = {
         .id = DRIVER_NAME,
@@ -236,12 +237,18 @@ static void refresh_lcd(struct myfb_par *par)
 //        count++;
 //        printk("%u",count);
 //    }
-    count++;
-    if (count > 3) {
+   if (sync == false) {
+       if (gscan[2] == 1)
+           sync = true;
+   }
+    if (sync == true) {
+        count++;
+    }
+    if (count >= 3) {
         count = 0;
     }
     //printk("%u %u %u %u %u %u %u %u", gscan[0], gscan[1], gscan[2], gscan[3], gscan[4], gscan[5], gscan[6], gscan[7]);
-    if ((par->app_virt->yoffset == 0 && gscan[2] == 1) || (par->app_virt->yoffset == 240 && gscan[2] == 1) || (count == 0)){
+    if ((par->app_virt->yoffset == 0 && gscan[2] == 1) || (par->app_virt->yoffset == 240 && gscan[2] == 1)){
         suniv_clrbits(iomm.lcdc + TCON_INT_REG0, (1 << 15));
         suniv_clrbits(iomm.lcdc + TCON_CTRL_REG, (1 << 31));
         if (par->lcdc_ready) {
@@ -325,6 +332,11 @@ static void init_lcd(void)
     lcdc_wr_dat(0x33);
     lcdc_wr_dat(0x33);
 
+    lcdc_wr_cmd(0xe4);
+    lcdc_wr_dat(0x02);
+    lcdc_wr_dat(0x00);
+    lcdc_wr_dat(0x15);
+
     lcdc_wr_cmd(0xb7);
     lcdc_wr_dat(0x35);
 
@@ -339,8 +351,8 @@ static void init_lcd(void)
     lcdc_wr_cmd(0xc0);
     lcdc_wr_dat(0x3c);
 
-    //lcdc_wr_cmd(0x35);
-    //lcdc_wr_dat(0x00);
+    lcdc_wr_cmd(0x35);
+    lcdc_wr_dat(0x00);
 
     lcdc_wr_cmd(0xc2);
     lcdc_wr_dat(0x01);
@@ -408,7 +420,14 @@ static void init_lcd(void)
 
 static void suniv_lcdc_init(struct myfb_par *par)
 {
-    uint32_t ret=0, p1=0, p2=0;
+
+    uint32_t ret=0, bp=0, total=0;
+    uint32_t h_front_porch = 14;
+    uint32_t h_back_porch = 14;
+    uint32_t h_sync_len = 4;
+    uint32_t v_front_porch = 14;
+    uint32_t v_back_porch = 14;
+    uint32_t v_sync_len = 4;
 
     writel(0, iomm.lcdc + TCON_CTRL_REG);
     writel(0, iomm.lcdc + TCON_INT_REG0);
@@ -456,21 +475,16 @@ static void suniv_lcdc_init(struct myfb_par *par)
     writel((4 << 29) | (1 << 26), iomm.lcdc + TCON0_CPU_IF_REG);
     writel((1 << 28), iomm.lcdc + TCON0_IO_CTRL_REG0);
 
-    p1 = par->mode.yres - 1;
-    p2 = par->mode.xres - 1;
-    writel((p2 << 16) | (p1 << 0), iomm.lcdc + TCON0_BASIC_TIMING_REG0);
-
-    p1 = 1 + 1;
-    p2 = par->mode.xres + 11 ;
-    writel((p2 << 16) | (p1 << 0), iomm.lcdc + TCON0_BASIC_TIMING_REG1);
-
-    p1 = 1 + 1;
-    p2 = (par->mode.yres + 10) << 1;
-    writel((p2 << 16) | (p1 << 0), iomm.lcdc + TCON0_BASIC_TIMING_REG2);
-
-    p1 = 1 + 1;
-    p2 = 1 + 1;
-    writel((p2 << 16) | (p1 << 0), iomm.lcdc + TCON0_BASIC_TIMING_REG3);
+    writel(((par->mode.xres - 1) << 16) | ((par->mode.yres - 1) << 0), iomm.lcdc + TCON0_BASIC_TIMING_REG0);
+    bp = h_sync_len + h_back_porch;
+    total = par->mode.xres * 1 + h_front_porch + bp;
+    writel(((total - 1) << 16) | ((bp - 1) << 0), iomm.lcdc + TCON0_BASIC_TIMING_REG1);
+    bp = v_sync_len + v_back_porch;
+    total = par->mode.yres + v_front_porch + bp;
+    writel(((total * 2) << 16) | ((bp - 1) << 0), iomm.lcdc + TCON0_BASIC_TIMING_REG2);
+    writel(((h_sync_len - 1) << 16) | ((v_sync_len - 1) << 0), iomm.lcdc + TCON0_BASIC_TIMING_REG3);
+    writel(0, iomm.lcdc + TCON0_HV_TIMING_REG);
+    writel(0, iomm.lcdc + TCON0_IO_CTRL_REG1);
 
     writel(0, iomm.lcdc + TCON0_HV_TIMING_REG);
     writel(0, iomm.lcdc + TCON0_IO_CTRL_REG1);
@@ -478,7 +492,6 @@ static void suniv_lcdc_init(struct myfb_par *par)
     suniv_setbits(iomm.lcdc + TCON_CTRL_REG, (1 << 31));
     init_lcd();
     suniv_setbits(iomm.lcdc + TCON_INT_REG0, (1 << 31));
-    suniv_setbits(iomm.lcdc + TCON0_CPU_IF_REG, (1 << 24));
     suniv_setbits(iomm.lcdc + TCON0_CPU_IF_REG, (1 << 28));
 }
 
@@ -494,6 +507,17 @@ static void suniv_enable_irq(struct myfb_par *par)
         ret = request_irq(par->lcdc_irq, lcdc_irq_handler, IRQF_SHARED, "lcdc_irq", par);
         if(ret){
             printk("%s, failed to register lcdc interrupt(%d)\n", __func__, par->lcdc_irq);
+        }
+    }
+
+    par->gpio_irq = gpio_to_irq(((32 * 4) + 10));
+    if(par->gpio_irq < 0){
+        printk("%s, failed to get irq number for gpio irq\n", __func__);
+    }
+    else{
+        ret = request_irq(par->gpio_irq, gpio_irq_handler, IRQF_TRIGGER_RISING, "gpio_irq", par);
+        if(ret){
+            printk("%s, failed to register gpio interrupt(%d)\n", __func__, par->gpio_irq);
         }
     }
 }
