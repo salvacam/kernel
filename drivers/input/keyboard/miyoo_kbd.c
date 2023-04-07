@@ -438,10 +438,10 @@ static void scan_handler(unsigned long unused)
           gpio_direction_input(IN_L1_Q8);
 
           if(gpio_get_value(IN_1) == 0){
-              val|= MY_A;
+              val|= MY_TA;
           }
           if(gpio_get_value(IN_A_M3) == 0){
-              val|= MY_TA;
+              val|= MY_A;
           }
           if(gpio_get_value(IN_2) == 0){
               val|= MY_TB;
